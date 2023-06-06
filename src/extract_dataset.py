@@ -24,23 +24,19 @@ def construct_dataset(tok_name: str = 'bert-base-uncased'):
     new_datasets = DatasetDict()
     for split in ["train", "test", "validation"]:
         sentences = []
-        tokenized = []
         labels = []
         for sample in tqdm(dataset[split]):
             sample_sentences = sent_tokenize(sample["text"], language="english")
             # sorting out latex math env
             sample_sentences = [sample_sentence.strip('"') for sample_sentence in sample_sentences if "$" not in sample_sentence]
             sample_labels = [sample["label"] for i in range(len(sample_sentences))]
-            sample_tokenized = [tokenizer.encode(sample_sentence, return_tensors='pt')[0] for sample_sentence in sample_sentences]
             sentences.extend(sample_sentences)
             labels.extend(sample_labels)
-            tokenized.extend(sample_tokenized)
         random.shuffle(sentences)
         random.shuffle(labels)
-        random.shuffle(tokenized)
         new_datasets[split] = Dataset.from_dict({"sent": sentences, "label": labels})
-        new_datasets[split] = new_datasets[split].add_column("tokenized", [tok.numpy() for tok in tokenized])
-        # new_datasets[split] = new_datasets[split].add_column("tokenized", tokenized)
+
+
 
     new_datasets.save_to_disk("../data/hm_dataset")
 
@@ -54,13 +50,7 @@ def load_dataset_info() -> DatasetDict:
     :return:
     """
 
-    def to_tensor(example):
-        example["tokenized"] = torch.tensor(example["tokenized"])
-        return example
-
     dataset = DatasetDict.load_from_disk("../data/hm_dataset")
-    dataset.set_format("torch")
-    dataset.map(to_tensor)
     print("DATASET:")
     print(f'train-size: {len(dataset["train"])}')
     print(f'test-size: {len(dataset["test"])}')
@@ -71,6 +61,6 @@ def load_dataset_info() -> DatasetDict:
     return dataset
 
 
-#construct_dataset()
+construct_dataset()
 load_dataset_info()
 
