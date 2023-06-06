@@ -59,7 +59,7 @@ def load_dataset_info() -> DatasetDict:
         return example
 
     dataset = DatasetDict.load_from_disk("../data/hm_dataset")
-    dataset.set_format("torch", columns=["tokenized"])
+    dataset.set_format("torch")
     dataset.map(to_tensor)
     print("DATASET:")
     print(f'train-size: {len(dataset["train"])}')
