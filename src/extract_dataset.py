@@ -62,7 +62,7 @@ def construct_dataset(tok_name: str = 'bert-base-uncased', max_len: int = 512):
     new_datasets.save_to_disk("../data/hm_dataset")
 
 
-def load_dataset_info() -> DatasetDict:
+def load_dataset_info(do_print: bool = True) -> DatasetDict:
     """
     Function for loading dataset from disc.
     1 --> machine generated
@@ -81,12 +81,11 @@ def load_dataset_info() -> DatasetDict:
     dataset = DatasetDict.load_from_disk("../data/hm_dataset")
     dataset.set_format("torch")
     # dataset = dataset.map(to_tensor)
-    print("DATASET:")
-    print(f'train-size: {len(dataset["train"])}')
-    print(f'test-size: {len(dataset["test"])}')
-    print(f'val-size: {len(dataset["validation"])}')
-
-    # print(dataset["train"][0])
+    if do_print:
+        print("DATASET:")
+        print(f'train-size: {len(dataset["train"])}')
+        print(f'test-size: {len(dataset["test"])}')
+        print(f'val-size: {len(dataset["validation"])}')
 
     return dataset
 

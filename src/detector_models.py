@@ -1,4 +1,6 @@
 from collections import defaultdict
+from typing import Optional
+
 from tqdm import tqdm
 import numpy as np
 import torch
@@ -16,16 +18,17 @@ class HumanMachineClassifierBert(nn.Module):
         self.bert = BertModel.from_pretrained(tok_name)
         self.tokenizer = BertTokenizer.from_pretrained(tok_name)
         self.drop = nn.Dropout(p=0.3)
-        self.out = nn.Linear(self.bert.config.hidden_size, 2)
+        self.out = nn.Linear(self.bert.config.hidden_size, 1)
+        self.sigmoid = nn.Sigmoid()
         # self.softmax = nn.Softmax(dim=1)
 
     def forward(self, input_ids, attention_mask):
         pooled_output = self.bert(input_ids=input_ids,
-                                     attention_mask=attention_mask).pooler_output
+                                  attention_mask=attention_mask).pooler_output
         output = self.drop(pooled_output)
         output = self.out(output)
         # return self.softmax(output)
-        return output
+        return self.sigmoid(output)
 
 
 class Trainer:
@@ -33,14 +36,28 @@ class Trainer:
                  model: nn.Module,
                  batch_size: int = 8,
                  epochs: int = 10,
-                 device: str = "cuda:0"
+                 device: str = "cuda:0",
+                 max_steps: Optional[int] = None,
+                 lr_rate: float = 2e-5,
+                 warm_up_steps: int = 2000
                  ):
         self.device = device
         self.model = model
         self.model.to(self.device)
         self.epochs = epochs
-        self.optimizer = AdamW(model.parameters(), lr=2e-5, correct_bias=False)
-        dataset = load_dataset_info()
+        self.optimizer = AdamW(model.parameters(), lr=lr_rate, correct_bias=False)
+        dataset = load_dataset_info(do_print=False)
+        if max_steps is not None:
+            max_steps = max_steps // epochs
+            dataset["train"] = dataset["train"].select(range(int(max_steps * 0.8)))
+            dataset["test"] = dataset["test"].select(range(int(max_steps * 0.1)))
+            dataset["validation"] = dataset["validation"].select(range(int(max_steps * 0.1)))
+
+        print("DATASET:")
+        print(f'train-size: {len(dataset["train"])}')
+        print(f'test-size: {len(dataset["test"])}')
+        print(f'val-size: {len(dataset["validation"])}')
+
         self.n_samples_train = len(dataset["train"])
         self.n_samples_test = len(dataset["test"])
         self.n_samples_val = len(dataset["validation"])
@@ -50,9 +67,10 @@ class Trainer:
         self.val_data_loader = val
         self.total_steps = len(self.train_data_loader) * self.epochs
         self.scheduler = get_linear_schedule_with_warmup(self.optimizer,
-                                                         num_warmup_steps=0,
+                                                         num_warmup_steps=warm_up_steps,
                                                          num_training_steps=self.total_steps)
-        self.loss_fn = nn.CrossEntropyLoss().to(self.device)
+        # self.loss_fn = nn.CrossEntropyLoss().to(self.device)
+        self.loss_fn = nn.BCELoss().to(self.device)
 
     def train_epoch(self):
         model = self.model.train()
@@ -61,20 +79,22 @@ class Trainer:
         for d in tqdm(self.train_data_loader, desc="train"):
             input_ids = d["input_ids"].to(self.device)
             attention_mask = d["attention_mask"].to(self.device)
-            targets = d["label"].to(self.device)
-            outputs = model(
+            targets = d["label"].float().to(self.device)
+            preds = model(
                 input_ids=input_ids,
                 attention_mask=attention_mask
-            )
-            _, preds = torch.max(outputs, dim=1)
-            loss = self.loss_fn(outputs, targets)
-            correct_predictions += torch.sum(preds == targets)
+            ).flatten()
+            # _, preds = torch.max(outputs, dim=1)
+            #print(preds)
+            #print(targets)
+            loss = self.loss_fn(preds, targets)
+            correct_predictions += torch.sum(preds.round() == targets)
             losses.append(loss.item())
+            self.optimizer.zero_grad()
             loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            # nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             self.optimizer.step()
             self.scheduler.step()
-            self.optimizer.zero_grad()
         return correct_predictions.double() / self.n_samples_train, np.mean(losses)
 
     def eval_model(self):
@@ -85,14 +105,14 @@ class Trainer:
             for d in tqdm(self.val_data_loader, desc="eval"):
                 input_ids = d["input_ids"].to(self.device)
                 attention_mask = d["attention_mask"].to(self.device)
-                targets = d["label"].to(self.device)
-                outputs = model(
+                targets = d["label"].float().to(self.device)
+                preds = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask
-                )
-                _, preds = torch.max(outputs, dim=1)
-                loss = self.loss_fn(outputs, targets)
-                correct_predictions += torch.sum(preds == targets)
+                ).flatten()
+                # _, preds = torch.max(outputs, dim=1)
+                loss = self.loss_fn(preds, targets)
+                correct_predictions += torch.sum(preds.round() == targets)
                 losses.append(loss.item())
         return correct_predictions.double() / self.n_samples_val, np.mean(losses)
 
@@ -104,14 +124,14 @@ class Trainer:
             for d in self.test_data_loader:
                 input_ids = d["input_ids"].to(self.device)
                 attention_mask = d["attention_mask"].to(self.device)
-                targets = d["label"].to(self.device)
-                outputs = model(
+                targets = d["label"].float().to(self.device)
+                preds = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask
-                )
-                _, preds = torch.max(outputs, dim=1)
-                loss = self.loss_fn(outputs, targets)
-                correct_predictions += torch.sum(preds == targets)
+                ).flatten()
+                # _, preds = torch.max(outputs, dim=1)
+                loss = self.loss_fn(preds, targets)
+                correct_predictions += torch.sum(preds.round() == targets)
                 losses.append(loss.item())
         return correct_predictions.double() / self.n_samples_test, np.mean(losses)
 
@@ -126,19 +146,22 @@ class Trainer:
                 texts = d["sent"]
                 input_ids = d["input_ids"].to(self.device)
                 attention_mask = d["attention_mask"].to(self.device)
-                targets = d["label"].to(self.device)
-                outputs = model(
+                targets = d["label"].float().to(self.device)
+                preds = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask
-                )
-                _, preds = torch.max(outputs, dim=1)
+                ).flatten()
+                # _, preds = torch.max(outputs, dim=1)
                 review_texts.extend(texts)
-                predictions.extend(preds)
-                prediction_probs.extend(outputs)
+                predictions.extend(preds.round())
+                prediction_probs.extend(preds)
                 real_values.extend(targets)
         predictions = torch.stack(predictions).cpu()
         prediction_probs = torch.stack(prediction_probs).cpu()
         real_values = torch.stack(real_values).cpu()
+        print(predictions)
+        print(prediction_probs)
+        print(real_values)
         return review_texts, predictions, prediction_probs, real_values
 
     def train(self):
@@ -170,6 +193,7 @@ class Trainer:
 
 if __name__ == "__main__":
     model = HumanMachineClassifierBert()
-    # trainer = Trainer(model, batch_size=4).train()
-    trainer = Trainer(model, batch_size=16, device="cpu").train()
+    trainer = Trainer(model, batch_size=4).train()
+    # trainer = Trainer(model, batch_size=4, max_steps=10000, lr_rate=5e-6).train()
+    # trainer = Trainer(model, batch_size=16, device="cpu").train()
 
