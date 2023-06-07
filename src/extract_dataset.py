@@ -62,7 +62,7 @@ def construct_dataset(tok_name: str = 'bert-base-uncased', max_len: int = 512):
     new_datasets.save_to_disk("../data/hm_dataset")
 
 
-def load_dataset_info(do_print: bool = True) -> DatasetDict:
+def load_dataset_info(do_print: bool = True, format_torch: bool = True) -> DatasetDict:
     """
     Function for loading dataset from disc.
     1 --> machine generated
@@ -79,7 +79,8 @@ def load_dataset_info(do_print: bool = True) -> DatasetDict:
 
 
     dataset = DatasetDict.load_from_disk("../data/hm_dataset")
-    dataset.set_format("torch")
+    if format_torch:
+        dataset.set_format("torch")
     # dataset = dataset.map(to_tensor)
     if do_print:
         print("DATASET:")

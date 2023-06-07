@@ -1,3 +1,5 @@
+from typing import Union, List
+
 import dcor
 import dtw
 import hashlib
@@ -1755,3 +1757,34 @@ class Scorer():
 
         return scores, names, text_hash
 
+
+class ScorerModel:
+    def __init__(self, ling: bool = True, syn: bool = True, lang: str = "en"):
+        self.scorer = Scorer([], ling=ling, syn=syn, bertt=False, berts=False, bert_load=False)
+        self.lang = lang
+        self.softmax = torch.nn.Softmax(dim=0)
+        self.softmax_batch = torch.nn.Softmax(dim=1)
+
+    def __call__(self, text: Union[str, List[str]], *args, **kwargs):
+        if isinstance(text, list):
+            output = []
+            for i in text:
+                scores = self.scorer.run(self.lang, "no_object", i, load_text=False)[0]
+                scores = [0 if math.isnan(x) else x for x in scores[:40]]
+                output.append(scores)
+            return self.softmax_batch(torch.Tensor(output))
+        else:
+            scores, x, y = self.scorer.run(self.lang, "no_object", text, load_text=False)
+            scores = [0 if math.isnan(x) else x for x in scores[:40]]
+            return self.softmax(torch.Tensor(scores))
+        # return torch.norm(torch.Tensor(scores[:40]), p=2, dim=0, keepdim=True)
+
+
+if __name__ == "__main__":
+    s = ScorerModel()
+    resss = s(["This is the first sentence.", "This the second one, lets see!"])
+    print(resss.shape)
+    print(resss)
+    resss = s("This is the first sentence.")
+    print(resss.shape)
+    print(resss)
