@@ -74,11 +74,13 @@ def load_dataset_info() -> DatasetDict:
     def to_tensor(example):
         example["input_ids"] = torch.tensor(example["input_ids"])
         example["attention_mask"] = torch.tensor(example["attention_mask"])
+        # example["label"] = "human" if example["label"] == 0 else "machine"
         return example
+
 
     dataset = DatasetDict.load_from_disk("../data/hm_dataset")
     dataset.set_format("torch")
-    dataset.map(to_tensor)
+    # dataset = dataset.map(to_tensor)
     print("DATASET:")
     print(f'train-size: {len(dataset["train"])}')
     print(f'test-size: {len(dataset["test"])}')
@@ -100,6 +102,7 @@ def get_dataloaders(dataset: DatasetDict,
     :return:
     """
     train_loader = DataLoader(dataset["train"], batch_size=batch_size, num_workers=num_workers)
+    print(len(train_loader))
     test_loader = DataLoader(dataset["test"], batch_size=batch_size, num_workers=num_workers)
     val_loader = DataLoader(dataset["validation"], batch_size=batch_size, num_workers=num_workers)
     return train_loader, test_loader, val_loader
@@ -110,3 +113,4 @@ if __name__ == "__main__":
     trl, tel, val = get_dataloaders(ds)
     data = next(iter(trl))
     print(data)
+
