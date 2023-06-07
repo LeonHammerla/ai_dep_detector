@@ -9,7 +9,7 @@ from torch import nn, optim
 from torch.utils.data import DataLoader
 from transformers import BertModel, BertTokenizer, AdamW, get_linear_schedule_with_warmup
 
-from extract_dataset import load_dataset_info, get_dataloaders
+from extract_dataset import load_dataset_info, get_dataloaders, construct_dataset
 from textscorer import ScorerModel
 
 
@@ -27,21 +27,6 @@ class HumanMachineClassifierBert(nn.Module):
         pooled_output = self.bert(input_ids=input_ids,
                                   attention_mask=attention_mask).pooler_output
         output = self.drop(pooled_output)
-        output = self.out(output)
-        # return self.softmax(output)
-        return self.sigmoid(output)
-
-
-class HumanMachineClassifierFeature(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.scorer = ScorerModel()
-        self.out = nn.Linear(40, 1)
-        self.sigmoid = nn.Sigmoid()
-        # self.softmax = nn.Softmax(dim=1)
-
-    def forward(self, sent):
-        output = self.scorer(sent)
         output = self.out(output)
         # return self.softmax(output)
         return self.sigmoid(output)
@@ -207,6 +192,27 @@ class BertFeatureTrainer:
                 print(classification_report(y_test, y_pred, target_names=["human", "machine"]))
 
 
+class HumanMachineClassifierFeature(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layer1 = nn.Linear(40, 40)
+        self.act1 = nn.ReLU()
+        self.layer2 = nn.Linear(40, 40)
+        self.act2 = nn.ReLU()
+        self.layer3 = nn.Linear(40, 40)
+        self.act3 = nn.ReLU()
+        self.output = nn.Linear(40, 1)
+        self.sigmoid = nn.Sigmoid()
+        # self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, sent):
+        x = self.act1(self.layer1(sent))
+        x = self.act2(self.layer2(x))
+        x = self.act3(self.layer3(x))
+        x = self.sigmoid(self.output(x))
+        return x
+
+
 class FeatureTrainer:
     def __init__(self,
                  model: nn.Module,
@@ -219,6 +225,7 @@ class FeatureTrainer:
                  ):
         self.device = device
         self.model = model
+        self.scorer = ScorerModel()
         self.model.to(self.device)
         self.epochs = epochs
         self.optimizer = AdamW(model.parameters(), lr=lr_rate, correct_bias=False)
@@ -257,12 +264,13 @@ class FeatureTrainer:
         correct_predictions = 0
         for d in tqdm(self.train_data_loader, desc="train"):
             targets = d["label"].float().to(self.device)
+            input = self.scorer(d["sent"]).to(self.device)
             preds = model(
-                sent=d["sent"]
+                sent=input
             ).flatten()
             # _, preds = torch.max(outputs, dim=1)
-            print(preds)
-            print(targets)
+            #print(preds)
+            #print(targets)
             loss = self.loss_fn(preds, targets)
             correct_predictions += torch.sum(preds.round() == targets)
             losses.append(loss.item())
@@ -280,8 +288,9 @@ class FeatureTrainer:
         with torch.no_grad():
             for d in tqdm(self.val_data_loader, desc="eval"):
                 targets = d["label"].float().to(self.device)
+                input = self.scorer(d["sent"]).to(self.device)
                 preds = model(
-                    sent=d["sent"]
+                    sent=input
                 ).flatten()
                 # _, preds = torch.max(outputs, dim=1)
                 loss = self.loss_fn(preds, targets)
@@ -296,8 +305,9 @@ class FeatureTrainer:
         with torch.no_grad():
             for d in self.test_data_loader:
                 targets = d["label"].float().to(self.device)
+                input = self.scorer(d["sent"]).to(self.device)
                 preds = model(
-                    sent=d["sent"]
+                    sent=input
                 ).flatten()
                 # _, preds = torch.max(outputs, dim=1)
                 loss = self.loss_fn(preds, targets)
@@ -315,8 +325,9 @@ class FeatureTrainer:
             for d in tqdm(self.test_data_loader, desc="test"):
                 texts = d["sent"]
                 targets = d["label"].float().to(self.device)
+                input = self.scorer(d["sent"]).to(self.device)
                 preds = model(
-                    sent=d["sent"]
+                    sent=input
                 ).flatten()
                 # _, preds = torch.max(outputs, dim=1)
                 review_texts.extend(texts)
@@ -334,6 +345,7 @@ class FeatureTrainer:
     def train(self):
         history = defaultdict(list)
         best_accuracy = 0
+        progress = 0
         for epoch in range(self.epochs):
             print(f'Epoch {epoch + 1}/{self.epochs}')
             print('-' * 10)
@@ -350,6 +362,14 @@ class FeatureTrainer:
                 torch.save(self.model.state_dict(), '../data/best_feature_model_state.bin')
                 best_accuracy = val_acc
 
+            if val_acc >= history['val_acc'][-2]:
+                progress = 0
+            else:
+                progress += 1
+
+            if progress > 5:
+                break
+
             if epoch % 3 == 0:
                 # test_acc, _ = self.test_model()
                 _, y_pred, y_pred_probs, y_test = self.get_predictions()
@@ -357,13 +377,16 @@ class FeatureTrainer:
                 # print(test_acc)
                 print(classification_report(y_test, y_pred, target_names=["human", "machine"]))
 
-if __name__ == "__main__":
-    """model = HumanMachineClassifierBert()
-    trainer = Trainer(model, batch_size=4).train()
-    # trainer = Trainer(model, batch_size=4, max_steps=10000, lr_rate=5e-6).train()
-    # trainer = Trainer(model, batch_size=16, device="cpu").train()"""
 
-    model = HumanMachineClassifierFeature()
-    trainer = FeatureTrainer(model, batch_size=16, device="cpu", epochs=15).train()
+if __name__ == "__main__":
+    tok_name = "prajjwal1/bert-tiny"
+    # construct_dataset(tok_name=tok_name)
+    model = HumanMachineClassifierBert(tok_name=tok_name)
+    trainer = BertFeatureTrainer(model, batch_size=64, epochs=100).train()
+    # trainer = Trainer(model, batch_size=4, max_steps=10000, lr_rate=5e-6).train()
+    # trainer = Trainer(model, batch_size=16, device="cpu").train()
+
+    """model = HumanMachineClassifierFeature()
+    trainer = FeatureTrainer(model, batch_size=32, epochs=15, device="cuda:0").train()"""
 
 

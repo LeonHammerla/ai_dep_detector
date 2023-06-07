@@ -59,10 +59,10 @@ def construct_dataset(tok_name: str = 'bert-base-uncased', max_len: int = 512):
         new_datasets[split] = new_datasets[split].add_column("attention_mask",
                                                              [tok['attention_mask'].flatten().numpy() for tok in tokenized])
 
-    new_datasets.save_to_disk("../data/hm_dataset")
+    new_datasets.save_to_disk(f"../data/hm_dataset_{tok_name.replace('/', '-')}")
 
 
-def load_dataset_info(do_print: bool = True, format_torch: bool = True) -> DatasetDict:
+def load_dataset_info(do_print: bool = True, format_torch: bool = True, tok_name: str = 'bert-base-uncased') -> DatasetDict:
     """
     Function for loading dataset from disc.
     1 --> machine generated
@@ -78,7 +78,7 @@ def load_dataset_info(do_print: bool = True, format_torch: bool = True) -> Datas
         return example
 
 
-    dataset = DatasetDict.load_from_disk("../data/hm_dataset")
+    dataset = DatasetDict.load_from_disk(f"../data/hm_dataset_{tok_name.replace('/', '-')}")
     if format_torch:
         dataset.set_format("torch")
     # dataset = dataset.map(to_tensor)
