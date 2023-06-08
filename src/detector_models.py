@@ -18,7 +18,7 @@ class HumanMachineClassifierBert(nn.Module):
         super().__init__()
         self.bert = BertModel.from_pretrained(tok_name)
         self.tokenizer = BertTokenizer.from_pretrained(tok_name)
-        self.drop = nn.Dropout(p=0.3)
+        # self.drop = nn.Dropout(p=0.3)
         self.out = nn.Linear(self.bert.config.hidden_size, 1)
         self.sigmoid = nn.Sigmoid()
         # self.softmax = nn.Softmax(dim=1)
@@ -26,7 +26,8 @@ class HumanMachineClassifierBert(nn.Module):
     def forward(self, input_ids, attention_mask):
         pooled_output = self.bert(input_ids=input_ids,
                                   attention_mask=attention_mask).pooler_output
-        output = self.drop(pooled_output)
+        # output = self.drop(pooled_output)
+        output = pooled_output
         output = self.out(output)
         # return self.softmax(output)
         return self.sigmoid(output)
@@ -380,9 +381,9 @@ class FeatureTrainer:
 
 if __name__ == "__main__":
     tok_name = "prajjwal1/bert-tiny"
-    # construct_dataset(tok_name=tok_name)
+    construct_dataset(tok_name=tok_name)
     model = HumanMachineClassifierBert(tok_name=tok_name)
-    trainer = BertFeatureTrainer(model, batch_size=64, epochs=100).train()
+    trainer = BertFeatureTrainer(model, batch_size=64, epochs=100, lr_rate=2e-4).train()
     # trainer = Trainer(model, batch_size=4, max_steps=10000, lr_rate=5e-6).train()
     # trainer = Trainer(model, batch_size=16, device="cpu").train()
 

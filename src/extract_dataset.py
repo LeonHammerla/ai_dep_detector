@@ -48,16 +48,13 @@ def construct_dataset(tok_name: str = 'bert-base-uncased', max_len: int = 512):
             sentences.extend(sample_sentences)
             labels.extend(sample_labels)
             tokenized.extend(sample_tokenized)
-        random.shuffle(sentences)
-        random.shuffle(labels)
-        random.shuffle(tokenized)
-        # print(tokenized[0])
-        # print(f"max-length: {max([tok['input_ids'].flatten().numpy().size for tok in tokenized])}")
+
         new_datasets[split] = Dataset.from_dict({"sent": sentences, "label": labels})
         new_datasets[split] = new_datasets[split].add_column("input_ids",
                                                              [tok['input_ids'].flatten().numpy() for tok in tokenized])
         new_datasets[split] = new_datasets[split].add_column("attention_mask",
                                                              [tok['attention_mask'].flatten().numpy() for tok in tokenized])
+        new_datasets[split] = new_datasets[split].shuffle()
 
     new_datasets.save_to_disk(f"../data/hm_dataset_{tok_name.replace('/', '-')}")
 
