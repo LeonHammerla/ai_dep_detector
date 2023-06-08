@@ -1,17 +1,26 @@
+import math
 from typing import Tuple
 
 import pandas as pd
 import torch
 from datasets import load_dataset, DatasetDict, Dataset
 from nltk.tokenize import sent_tokenize
-import random
 
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import BertTokenizer
 
+from dependency_features import DependencyFeatureExtractor
+from textscorer import ScorerModel
 
-def construct_dataset(tok_name: str = 'bert-base-uncased', max_len: int = 512):
+"""
+========================================================================================================================
+BERT_DATASET
+========================================================================================================================
+"""
+
+
+def construct_dataset_bert(tok_name: str = 'bert-base-uncased', max_len: int = 512):
     """
     Function for constructing dataset
     :return:
@@ -24,7 +33,6 @@ def construct_dataset(tok_name: str = 'bert-base-uncased', max_len: int = 512):
 
     # download private dataset from huggingface
     dataset = load_dataset("NicolaiSivesind/human-vs-machine", 'research_abstracts_labeled', use_auth_token=token)
-
     new_datasets = DatasetDict()
     # for split in ["test"]:
     for split in ["train", "test", "validation"]:
@@ -54,12 +62,12 @@ def construct_dataset(tok_name: str = 'bert-base-uncased', max_len: int = 512):
                                                              [tok['input_ids'].flatten().numpy() for tok in tokenized])
         new_datasets[split] = new_datasets[split].add_column("attention_mask",
                                                              [tok['attention_mask'].flatten().numpy() for tok in tokenized])
-        new_datasets[split] = new_datasets[split].shuffle()
+        # new_datasets[split] = new_datasets[split].shuffle()
 
     new_datasets.save_to_disk(f"../data/hm_dataset_{tok_name.replace('/', '-')}")
 
 
-def load_dataset_info(do_print: bool = True, format_torch: bool = True, tok_name: str = 'bert-base-uncased') -> DatasetDict:
+def load_dataset_info_bert(do_print: bool = True, format_torch: bool = True, tok_name: str = 'bert-base-uncased') -> DatasetDict:
     """
     Function for loading dataset from disc.
     1 --> machine generated
@@ -88,6 +96,97 @@ def load_dataset_info(do_print: bool = True, format_torch: bool = True, tok_name
     return dataset
 
 
+"""
+========================================================================================================================
+FEATURE_DATASET
+========================================================================================================================
+"""
+
+
+def construct_dataset_feat(feat_model: str = 'tree', funct: bool = False):
+    """
+    Function for constructing dataset
+    :return:
+    """
+
+    def filter_nans(example):
+        if sum(torch.isnan(torch.tensor(example["feat"]))) > 0:
+            return False
+        else:
+            return True
+
+    # use my model
+    if "tree" in feat_model:
+        model = DependencyFeatureExtractor(funct_analysis=funct)
+    else:
+        raise Exception
+
+    # load private token
+    with open("../data/token.txt", "r") as f:
+        token = f.read().strip()
+
+    # download private dataset from huggingface
+    dataset = load_dataset("NicolaiSivesind/human-vs-machine", 'research_abstracts_labeled', use_auth_token=token)
+    new_datasets = DatasetDict()
+    # for split in ["test"]:
+    for split in ["train", "test", "validation"]:
+        sentences = []
+        feats = []
+        labels = []
+        for sample in tqdm(dataset[split]):
+            sample_sentences = sent_tokenize(sample["text"], language="english")
+            # sorting out latex math env
+            sample_sentences = [sample_sentence.strip('"') for sample_sentence in sample_sentences if "$" not in sample_sentence]
+            sample_labels = [sample["label"] for i in range(len(sample_sentences))]
+            sample_feats = [model(sample_sentence) for sample_sentence in sample_sentences]
+
+            sentences.extend(sample_sentences)
+            labels.extend(sample_labels)
+            feats.extend(sample_feats)
+
+        new_datasets[split] = Dataset.from_dict({"sent": sentences, "label": labels})
+        new_datasets[split] = new_datasets[split].add_column("feat",
+                                                             [feat.flatten().numpy() for feat in feats])
+
+        # new_datasets[split] = new_datasets[split].shuffle()
+    new_datasets = new_datasets.filter(filter_nans)
+    new_datasets.save_to_disk(f"../data/hm_dataset_{feat_model}")
+
+
+def load_dataset_info_feat(do_print: bool = True, format_torch: bool = True, feat_model: str = 'tree') -> DatasetDict:
+    """
+    Function for loading dataset from disc.
+    1 --> machine generated
+    0 --> human written text
+    (model used: GPT3.5: GPT-3.5-turbo-0301)
+    :return:
+    """
+
+    def find_nans(example):
+        if sum(torch.isnan(example["feat"])) > 0:
+            print(example)
+        return example
+
+    def filter_nans(example):
+        if sum(torch.isnan(example["feat"])) > 0:
+            return False
+        else:
+            return True
+
+    dataset = DatasetDict.load_from_disk(f"../data/hm_dataset_{feat_model}")
+    if format_torch:
+        dataset.set_format("torch")
+    # dataset = dataset.filter(filter_nans)
+    if do_print:
+        print("DATASET:")
+        print(f'train-size: {len(dataset["train"])}')
+        print(f'test-size: {len(dataset["test"])}')
+        print(f'val-size: {len(dataset["validation"])}')
+
+
+    return dataset
+
+
 def get_dataloaders(dataset: DatasetDict,
                     batch_size: int = 16,
                     num_workers: int = 4) -> Tuple[DataLoader, DataLoader, DataLoader]:
@@ -106,8 +205,6 @@ def get_dataloaders(dataset: DatasetDict,
 
 
 if __name__ == "__main__":
-    ds = load_dataset_info()
-    trl, tel, val = get_dataloaders(ds)
-    data = next(iter(trl))
-    print(data)
+    ds = load_dataset_info_feat()
+
 
