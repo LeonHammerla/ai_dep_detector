@@ -390,6 +390,7 @@ class AutoBERTS(TextScore):
                     'dbmdz/bert-base-german-cased').to(device)
             model2 = BertModel.from_pretrained(
                     'dbmdz/bert-base-german-cased').to(device)
+            raise Exception
         elif lang == 'en':
             tokenizer = BertTokenizer.from_pretrained(
                 'prajjwal1/bert-tiny')
@@ -407,6 +408,7 @@ class AutoBERTS(TextScore):
                     'cl-tohoku/bert-base-japanese-whole-word-masking').to(device)
             model2 = BertModel.from_pretrained(
                     'cl-tohoku/bert-base-japanese-whole-word-masking').to(device)
+            raise Exception
 
         else:
             tokenizer = BertTokenizer.from_pretrained('bert-base-multilingual-cased')
@@ -414,6 +416,7 @@ class AutoBERTS(TextScore):
                     'dbmdz/bert-base-multilingual-cased').to(device)
             model2 = BertModel.from_pretrained(
                     'dbmdz/bert-base-multilingual-cased').to(device)
+            raise Exception
 
 
         idx = 0
@@ -572,7 +575,7 @@ class AutoBERTT(TextScore):
         f.close()
 
 
-    def score(self, text, hash_hex, text_id, label, lang, n_lags=10):
+    def score(self, text, hash_hex, text_id, label, lang="en", n_lags=10):
         texts = [text]
 
         names_btac = ['btac' + str(i+1) for i in range(n_lags)]
@@ -600,6 +603,7 @@ class AutoBERTT(TextScore):
                     'dbmdz/bert-base-german-cased')
             model = BertForMaskedLM.from_pretrained(
                     'dbmdz/bert-base-german-cased').to(device)
+            raise Exception
         elif lang == 'en':
             tokenizer = BertTokenizer.from_pretrained(
                 "prajjwal1/bert-tiny")
@@ -612,12 +616,13 @@ class AutoBERTT(TextScore):
                     'cl-tohoku/bert-base-japanese-whole-word-masking')
             model = BertForMaskedLM.from_pretrained(
                     'cl-tohoku/bert-base-japanese-whole-word-masking').to(device)
-
+            raise Exception
         else:
             tokenizer = BertTokenizer.from_pretrained(
                     'bert-base-multilingual-cased')
             model = BertForMaskedLM.from_pretrained(
                     'bert-base-multilingual-cased').eval().to(device)
+            raise Exception
 
         def run(tokens_tensor, segments_tensors, masked_token):
             with torch.no_grad():
@@ -1760,10 +1765,14 @@ class Scorer():
 
 class ScorerModel:
     def __init__(self, ling: bool = True, syn: bool = True, lang: str = "en"):
-        self.scorer = Scorer([], ling=ling, syn=syn, bertt=False, berts=False, bert_load=False)
+        self.scorer = Scorer([], ling=ling, syn=syn, bertt=False, berts=False, bert_load=False, tfidf=True, tfidf_max=10)
         self.lang = lang
         self.softmax = torch.nn.Softmax(dim=0)
         self.softmax_batch = torch.nn.Softmax(dim=1)
+
+    @staticmethod
+    def normalize_data(data):
+        return (data - np.min(data)) / (np.max(data) - np.min(data))
 
     def __call__(self, text: Union[str, List[str]], *args, **kwargs):
         if isinstance(text, list):
@@ -1775,16 +1784,18 @@ class ScorerModel:
             return self.softmax_batch(torch.Tensor(output))
         else:
             scores, x, y = self.scorer.run(self.lang, "no_object", text, load_text=False)
-            scores = [0 if math.isnan(x) else x for x in scores[:40]]
-            return self.softmax(torch.Tensor(scores))
+            scores = [0 if math.isnan(x) else x for x in scores[:]]
+            return torch.Tensor(self.normalize_data(scores))
+            #return self.softmax(torch.Tensor(scores))
         # return torch.norm(torch.Tensor(scores[:40]), p=2, dim=0, keepdim=True)
 
 
 if __name__ == "__main__":
     s = ScorerModel()
+    """
     resss = s(["This is the first sentence.", "This the second one, lets see!"])
     print(resss.shape)
-    print(resss)
+    print(resss)"""
     resss = s("This is the first sentence.")
     print(resss.shape)
     print(resss)
