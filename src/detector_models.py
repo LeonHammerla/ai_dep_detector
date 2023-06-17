@@ -43,6 +43,7 @@ class HumanMachineClassifierBert(nn.Module):
         return self.sigmoid(output)
 
 
+# actually used
 class HumanMachineClassifierBertTiny(nn.Module):
     def __init__(self, tok_name: str = "prajjwal1/bert-tiny"):
         super(HumanMachineClassifierBertTiny, self).__init__()
@@ -56,7 +57,7 @@ class HumanMachineClassifierBertTiny(nn.Module):
         self.sigmoid = nn.Sigmoid()
         # self.softmax = nn.Softmax(dim=1)
 
-    def forward(self, input_ids, attention_mask):
+    def forward(self, input_ids, attention_mask, **kwargs):
         output = self.bert(input_ids=input_ids,
                            attention_mask=attention_mask).pooler_output
         # output = self.drop(pooled_output)
@@ -668,6 +669,7 @@ DEP-FEATURE-BERT-FEATURE-BASED-TRAINING
 """
 
 
+# actually used
 class HumanMachineClassifierBertTinyFeatureTiny(nn.Module):
     def __init__(self, tok_name: str = "prajjwal1/bert-tiny"):
         super(HumanMachineClassifierBertTinyFeatureTiny, self).__init__()
@@ -682,7 +684,7 @@ class HumanMachineClassifierBertTinyFeatureTiny(nn.Module):
         self.feat_bert_l1 = nn.Linear(64, 1)
         self.sigmoid = nn.Sigmoid()
 
-    def forward(self, input_ids, attention_mask, feat):
+    def forward(self, input_ids, attention_mask, feat, **kwargs):
         bert_out = self.bert(input_ids=input_ids,
                              attention_mask=attention_mask).pooler_output
 
