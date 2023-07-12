@@ -1,18 +1,25 @@
+import copy
+import pickle
 from collections import defaultdict
 from typing import Optional
-
+from sklearn.kernel_approximation import Nystroem
+from sklearn import svm
 from tqdm import tqdm
 import numpy as np
 import torch
 from sklearn.metrics import classification_report
 from torch import nn, optim
-from torch.utils.data import DataLoader
+from datasets import Dataset
 from transformers import BertModel, BertTokenizer, AdamW, get_linear_schedule_with_warmup
-
+from sklearn.kernel_approximation import RBFSampler
 from dependency_features import DependencyFeatureExtractor
 from extract_dataset import load_dataset_info_bert, get_dataloaders, construct_dataset_bert, load_dataset_info_feat, \
     construct_dataset_feat, load_dataset_info_bert_feat
 from textscorer import ScorerModel
+from sklearn.linear_model import SGDClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import make_pipeline
+from sklearn.kernel_approximation import SkewedChi2Sampler
 
 """
 ========================================================================================================================
@@ -115,9 +122,10 @@ class BertFeatureTrainer:
         losses = []
         correct_predictions = 0
         for d in tqdm(self.train_data_loader, desc="train"):
+            targets = d["label"].float().to(self.device)
             input_ids = d["input_ids"].to(self.device)
             attention_mask = d["attention_mask"].to(self.device)
-            targets = d["label"].float().to(self.device)
+
             preds = model(
                 input_ids=input_ids,
                 attention_mask=attention_mask
@@ -660,6 +668,133 @@ class FeatureTrainer:
                     pass
 
 
+class VectorMachine:
+    def __init__(self, load: bool = False):
+        self.dataset = load_dataset_info_bert_feat(do_print=False,
+                                                   format_torch=True,
+                                                   tok_name="prajjwal1/bert-tiny",
+                                                   feat_model="tree_small")
+        if load:
+            self.model = self.load_model(f"../data/dep_svm_exp/svm")
+        else:
+            self.model = None
+
+    @staticmethod
+    def save_model(model, filename: str):
+        pickle.dump(model, open(filename, 'wb'))
+
+    @staticmethod
+    def load_model(filename: str):
+        return pickle.load(open(filename, 'rb'))
+
+    def train(self):
+        ds_train = copy.deepcopy(self.dataset["train"])
+        ds_train.shuffle()
+        ds_train.set_format("torch")
+        targets = ds_train["label"].float().numpy()
+        input_feats = ds_train["feat"].numpy()
+
+        clf = svm.SVC(verbose=True)
+        clf.fit(input_feats, targets)
+
+        self.save_model(clf, f"../data/dep_svm_exp/svm")
+        self.model = clf
+        self.test(copy.deepcopy(self.dataset["test"]))
+
+    def test(self, ds: Dataset, save: bool = True):
+        ds.shuffle()
+        ds.set_format("torch")
+        targets = ds["label"].float().numpy()
+        input_feats = ds["feat"].numpy()
+
+        y_pred = self.model.predict(input_feats)
+
+        report = classification_report(targets, y_pred, target_names=["human", "machine"])
+        print(report)
+        if save:
+            f = open(f"../data/dep_svm_exp/log.txt", mode="w")
+            f.write(100 * "=")
+            f.write("\n")
+            f.write("CLASSIFICATION_REPORTS:\n")
+            f.write(100 * "=")
+            f.write("\n\n")
+            f.write(report)
+            f.flush()
+            f.close()
+
+    def __call__(self, ds: Dataset, save: bool = False, *args, **kwargs):
+        self.test(ds, save)
+
+
+class SGDMachine:
+    def __init__(self, load: bool = False):
+        self.dataset = load_dataset_info_bert_feat(do_print=False,
+                                                   format_torch=True,
+                                                   tok_name="prajjwal1/bert-tiny",
+                                                   feat_model="tree_small")
+        if load:
+            self.model = self.load_model(f"../data/dep_sgd_exp/sgd")
+        else:
+            self.model = None
+
+    @staticmethod
+    def save_model(model, filename: str):
+        pickle.dump(model, open(filename, 'wb'))
+
+    @staticmethod
+    def load_model(filename: str):
+        return pickle.load(open(filename, 'rb'))
+
+    def train(self):
+        ds_train = copy.deepcopy(self.dataset["train"])
+        ds_train.shuffle()
+        ds_train.set_format("torch")
+        targets = ds_train["label"].float().numpy()
+        input_feats = ds_train["feat"].numpy()
+
+        # rbf_feature = RBFSampler(gamma=1, random_state=1, n_components=300)
+        # rbf_feature = Nystroem(gamma=.2, random_state=1, n_components=300)
+        rbf_feature = SkewedChi2Sampler(skewedness=.01, n_components=10000, random_state=0)
+
+        input_feats = rbf_feature.fit_transform(input_feats)
+
+        clf = make_pipeline(StandardScaler(), SGDClassifier(max_iter=7000, tol=None, verbose=1), verbose=True)
+        clf.fit(input_feats, targets)
+
+        self.save_model(clf, f"../data/dep_sgd_exp/sgd")
+        self.model = clf
+        self.test(copy.deepcopy(self.dataset["test"]))
+
+    def test(self, ds: Dataset, save: bool = True):
+        ds.shuffle()
+        ds.set_format("torch")
+        targets = ds["label"].float().numpy()
+        input_feats = ds["feat"].numpy()
+
+        # rbf_feature = RBFSampler(gamma=1, random_state=1, n_components=300)
+        # rbf_feature = Nystroem(gamma=1, random_state=1, n_components=300)
+        rbf_feature = SkewedChi2Sampler(skewedness=.01, n_components=10000, random_state=0)
+
+        input_feats = rbf_feature.fit_transform(input_feats)
+
+        y_pred = self.model.predict(input_feats)
+
+        report = classification_report(targets, y_pred, target_names=["human", "machine"])
+        print(report)
+        if save:
+            f = open(f"../data/dep_sgd_exp/log.txt", mode="w")
+            f.write(100 * "=")
+            f.write("\n")
+            f.write("CLASSIFICATION_REPORTS:\n")
+            f.write(100 * "=")
+            f.write("\n\n")
+            f.write(report)
+            f.flush()
+            f.close()
+
+    def __call__(self, ds: Dataset, save: bool = False, *args, **kwargs):
+        self.test(ds, save)
+
 """
 ========================================================================================================================
 ========================================================================================================================
@@ -888,12 +1023,12 @@ class BertFeatureDepFeatureTrainer:
 
 
 if __name__ == "__main__":
-    tok_name = "prajjwal1/bert-tiny"
+    """tok_name = "prajjwal1/bert-tiny"
     # construct_dataset_bert(tok_name=tok_name)
     model = HumanMachineClassifierBertTiny(tok_name=tok_name)
     trainer = BertFeatureTrainer(model, batch_size=32, epochs=50, lr_rate=2e-5).train()
     # trainer = Trainer(model, batch_size=4, max_steps=10000, lr_rate=5e-6).train()
-    # trainer = Trainer(model, batch_size=16, device="cpu").train()
+    # trainer = Trainer(model, batch_size=16, device="cpu").train()"""
 
     """construct_dataset_feat(feat_model="different_scorer")
     model = HumanMachineClassifierFeature10()
@@ -915,4 +1050,5 @@ if __name__ == "__main__":
                                  feat_model="tree_small",
                                  tok_name=tok_name).train()
     """
-
+    # VectorMachine().train()
+    SGDMachine().train()

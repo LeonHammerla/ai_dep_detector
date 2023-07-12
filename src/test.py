@@ -20,11 +20,12 @@ from textscorer import ScorerModel
 
 TOKENIZERS_PARALLELISM = True
 
+
 class Experiment:
     def __init__(self,
                  model: nn.Module,
                  model_path: str,
-                 paraphraser: Paraphraser,
+                 # paraphraser: Paraphraser,
                  batch_size: int = 32,
                  max_len: int = 512,
                  device: str = "cuda:0",
@@ -42,7 +43,7 @@ class Experiment:
         self.tokenizer = BertTokenizer.from_pretrained(tok_name)
 
         # paraphraser
-        self.paraphraser = paraphraser
+        # self.paraphraser = paraphraser
 
         # feat model
         self.dep_feat_model = DependencyFeatureExtractor(funct_analysis=False)
@@ -137,65 +138,121 @@ class Experiment:
         real_values = torch.stack(real_values).cpu()
         return review_texts, predictions, prediction_probs, real_values
 
-    def test(self):
-        # test_acc, _ = self.test_model()
-        _, y_pred, y_pred_probs, y_test = self.get_predictions(self.test_data_loader)
-        # print(test_acc)
-        print(classification_report(y_test, y_pred, target_names=["human", "machine"]))
+    def paraphrase_ds(self, paraphraser: Paraphraser, range_: Optional[int] = None, save_load: str = "save") -> DataLoader:
+        if save_load == "save":
+            dataset_test: Dataset = \
+            DatasetDict.load_from_disk(f"../data/hm_dataset_{self.tok_name.replace('/', '-')}+{self.feat_model}")["test"]
+            if range_ is not None:
+                dataset_test = dataset_test.select(range(range_))
+            paraphrased_dataset = self.paraphrase_dataset(dataset_test,
+                                                          paraphraser,
+                                                          self.tokenizer,
+                                                          self.dep_feat_model,
+                                                          self.max_len)
+            paraphrased_dataset.save_to_disk(f"../data/paraphrased_ds/para_set")
+        elif save_load == "load":
+            paraphrased_dataset = Dataset.load_from_disk(f"../data/paraphrased_ds/para_set")
+        else:
+            raise Exception
 
-    def test_paraphrase(self, range_: Optional[int] = None):
-        dataset_test: Dataset = DatasetDict.load_from_disk(f"../data/hm_dataset_{self.tok_name.replace('/', '-')}+{self.feat_model}")["test"]
-        if range_ is not None:
-            dataset_test = dataset_test.select(range(range_))
-        paraphrased_dataset = self.paraphrase_dataset(dataset_test,
-                                                      self.paraphraser,
-                                                      self.tokenizer,
-                                                      self.dep_feat_model,
-                                                      self.max_len)
         if self.device != "cpu":
             paraphrased_dataset.set_format("torch")
 
         test_loader = DataLoader(paraphrased_dataset, batch_size=self.batch_size, num_workers=4)
+        return test_loader
 
+    def test(self, test_loader: DataLoader) -> str:
         _, y_pred, y_pred_probs, y_test = self.get_predictions(test_loader)
-        print(classification_report(y_test, y_pred, target_names=["human", "machine"]))
+        return classification_report(y_test, y_pred, target_names=["human", "machine"])
 
 
-def dep_test():
+def main(ran: Optional[int] = 50):
+    f = open(f'../data/final_results/logs_exp01.txt', mode="w")
+    # general
+    feat_model = "tree_small"
+    tok_name = "prajjwal1/bert-tiny"
+    para = AutoParaphraser("humarin/chatgpt_paraphraser_on_T5_base", cuda=True)
+
     # dep test
     m_dep = HumanMachineClassifierBertTiny()
     m_dep_path = "../data/feat_exp/best_model_state.bin"
-    para = AutoParaphraser("humarin/chatgpt_paraphraser_on_T5_base", cuda=True)
-    feat_model = "tree_small"
-    tok_name = "prajjwal1/bert-tiny"
     exp_dep = Experiment(model=m_dep,
                          model_path=m_dep_path,
-                         paraphraser=para,
                          feat_model=feat_model,
                          tok_name=tok_name
                          )
-    #exp_dep.test()
-    print(50 * "=")
-    exp_dep.test_paraphrase(100)
+    paraphrased_testloader = exp_dep.paraphrase_ds(para, ran)
+    exp_dep_report0 = exp_dep.test(exp_dep.test_data_loader)
+    exp_dep_report1 = exp_dep.test(paraphrased_testloader)
+    del exp_dep
+    del m_dep
 
-def dep_feat_test():
-    # dep test
+    print(100*"=")
+    print("BERT-FEATURES-BEFORE:")
+    print(exp_dep_report0)
+    print("\n")
+    print("BERT-FEATURES-AFTER:")
+    print(exp_dep_report1)
+    print(100 * "=")
+
+    f.write(100*"=")
+    f.write("\n")
+    f.write("BERT-FEATURES-BEFORE:\n\n")
+    f.write(exp_dep_report0)
+    f.write("\n\n")
+    f.write("BERT-FEATURES-AFTER:\n")
+    f.write(exp_dep_report1)
+    f.write("\n\n")
+    f.write(100 * "=")
+    f.write("\n\n")
+
+    # dep test-feat
     m_dep_feat = HumanMachineClassifierBertTinyFeatureTiny()
     m_dep_feat_path = "../data/feat_dep_exp/best_model_state.bin"
-    para = AutoParaphraser("humarin/chatgpt_paraphraser_on_T5_base", cuda=True)
-    feat_model = "tree_small"
-    tok_name = "prajjwal1/bert-tiny"
-    exp_dep = Experiment(model=m_dep_feat,
-                         model_path=m_dep_feat_path,
-                         paraphraser=para,
-                         feat_model=feat_model,
-                         tok_name=tok_name
-                         )
-    #exp_dep.test()
-    print(50 * "=")
-    exp_dep.test_paraphrase(100)
+    exp_dep_feat = Experiment(model=m_dep_feat,
+                              model_path=m_dep_feat_path,
+                              feat_model=feat_model,
+                              tok_name=tok_name
+                              )
+    exp_dep_feat_report0 = exp_dep_feat.test(exp_dep_feat.test_data_loader)
+    exp_dep_feat_report1 = exp_dep_feat.test(paraphrased_testloader)
+
+    print(100 * "=")
+    print("BERT+DEP-FEATURES-BEFORE:")
+    print(exp_dep_feat_report0)
+    print("\n")
+    print("BERT+DEP-FEATURES-AFTER:")
+    print(exp_dep_feat_report1)
+    print(100 * "=")
+
+    f.write(100 * "=")
+    f.write("\n")
+    f.write("BERT+DEP-FEATURES-BEFORE:\n\n")
+    f.write(exp_dep_feat_report0)
+    f.write("\n\n")
+    f.write("BERT+DEP-FEATURES-AFTER:\n")
+    f.write(exp_dep_feat_report1)
+    f.write("\n\n")
+    f.write(100 * "=")
+    f.write("\n\n")
+
+    f.flush()
+    f.close()
 
 
 if __name__ == "__main__":
-    dep_test()
-    dep_feat_test()
+    # main(None)
+    # general
+    feat_model = "tree_small"
+    tok_name = "prajjwal1/bert-tiny"
+    para = AutoParaphraser("humarin/chatgpt_paraphraser_on_T5_base", cuda=True)
+
+    # dep test
+    m_dep = HumanMachineClassifierBertTiny()
+    m_dep_path = "../data/feat_exp/best_model_state.bin"
+    exp_dep = Experiment(model=m_dep,
+                         model_path=m_dep_path,
+                         feat_model=feat_model,
+                         tok_name=tok_name
+                         )
+    paraphrased_testloader = exp_dep.paraphrase_ds(para, None, save_load="save")
