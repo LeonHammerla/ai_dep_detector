@@ -5,7 +5,9 @@ import pandas as pd
 import torch
 from datasets import load_dataset, DatasetDict, Dataset
 from nltk.tokenize import sent_tokenize
-
+import spacy
+from spacy.tokens import Doc
+from spacy.language import Language
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import BertTokenizer
@@ -13,6 +15,16 @@ from transformers import BertTokenizer
 from dependency_features import DependencyFeatureExtractor
 from textscorer import ScorerModel
 from functools import partial
+
+from nltk import Tree
+
+
+def to_nltk_tree(node):
+    if node.n_lefts + node.n_rights > 0:
+        return Tree(node.orth_, [to_nltk_tree(child) for child in node.children])
+    else:
+        return node.orth_
+
 
 """
 ========================================================================================================================
@@ -277,6 +289,64 @@ def load_dataset_info_bert_feat(do_print: bool = True,
 
 """
 ========================================================================================================================
+Special DEP-Set
+========================================================================================================================
+"""
+
+
+def dep_parse_spacy_datasetdict(spacy_model_id: str = "en_core_web_sm",
+                                tok_name: str = 'prajjwal1/bert-tiny',
+                                feat_model: str = 'tree_small',
+                                max_len: int = 512):
+    def parse(example, nlp: spacy.Language):
+        doc = nlp(example["sent"])
+        tree = to_nltk_tree(list(doc.sents)[0].root)
+        example["sent"] = tree.pformat(nodesep=":")
+        return example
+
+    # tokenizer
+    def tok(example, tokenizer_obj: BertTokenizer, max_len: int = 512):
+        tokenized = tokenizer_obj.encode_plus(example["sent"],
+                                              add_special_tokens=True,
+                                              max_length=max_len,
+                                              return_token_type_ids=False,
+                                              # padding=True,
+                                              pad_to_max_length=True,
+                                              return_attention_mask=True,
+                                              truncation=True,
+                                              return_tensors='pt')
+        example["input_ids"] = tokenized["input_ids"].flatten()
+        example["attention_mask"] = tokenized["attention_mask"].flatten()
+        return example
+
+    @Language.component("special_split")
+    def special_split(doc):
+        # Note this code is not robust with handling indices
+        for i, tok in enumerate(doc):
+            if i == 0:
+                tok.is_sent_start = True
+            else:
+                tok.is_sent_start = False
+        return doc
+
+    # spacy-model
+    model = spacy.load(spacy_model_id)
+    model.add_pipe("special_split", before="parser")
+
+    # Bert tokenizer
+    tokenizer = BertTokenizer.from_pretrained(tok_name)
+
+    dsd = DatasetDict.load_from_disk(f"../data/hm_dataset_{tok_name.replace('/', '-')}+{feat_model}")
+
+    # map functions
+    map_parse = partial(parse, nlp=model)
+    map_tok = partial(tok, tokenizer_obj=tokenizer, max_len=max_len)
+    dsd = dsd.map(map_parse)
+    dsd = dsd.map(map_tok)
+    dsd.save_to_disk(f"../data/hm_dataset_{tok_name.replace('/', '-')}+{feat_model}+dep_tree")
+
+"""
+========================================================================================================================
 DataLoaders
 ========================================================================================================================
 """
@@ -300,5 +370,7 @@ def get_dataloaders(dataset: DatasetDict,
 
 
 if __name__ == "__main__":
-    construct_dataset_bert_feat()
-    load_dataset_info_bert_feat()
+    # construct_dataset_bert_feat()
+    # load_dataset_info_bert_feat()
+
+    dep_parse_spacy_datasetdict()

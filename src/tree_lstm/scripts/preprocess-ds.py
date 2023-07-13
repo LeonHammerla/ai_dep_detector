@@ -69,12 +69,18 @@ def parse(dirpath, cp=''):
 
 
 if __name__ == '__main__':
+    TEST = True
+    if TEST:
+        app = "_test"
+    else:
+        app = ""
+
     print('=' * 80)
     print('Preprocessing dataset')
     print('=' * 80)
 
     base_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-    data_dir = os.path.join(base_dir, 'data')
+    data_dir = os.path.join(base_dir, f'data{app}')
     ds_dir = os.path.join(data_dir, 'ds')
     lib_dir = os.path.join(base_dir, 'lib')
     train_dir = os.path.join(ds_dir, 'train')
@@ -88,15 +94,20 @@ if __name__ == '__main__':
         os.path.join(lib_dir, 'stanford-parser/stanford-parser.jar'),
         os.path.join(lib_dir, 'stanford-parser/stanford-parser-3.5.1-models.jar')])
 
-    # split into separate files
-    split(os.path.join(ds_dir, 'ds_train.txt'), train_dir)
-    split(os.path.join(ds_dir, 'ds_validation.txt'), dev_dir)
-    split(os.path.join(ds_dir, 'ds_test.txt'), test_dir)
+    if TEST:
+        # split into separate files
+        split(os.path.join(ds_dir, 'ds_test.txt'), test_dir)
+        parse(test_dir, cp=classpath)
+    else:
+        # split into separate files
+        split(os.path.join(ds_dir, 'ds_train.txt'), train_dir)
+        split(os.path.join(ds_dir, 'ds_validation.txt'), dev_dir)
+        split(os.path.join(ds_dir, 'ds_test.txt'), test_dir)
 
-    # parse sentences
-    parse(train_dir, cp=classpath)
-    parse(dev_dir, cp=classpath)
-    parse(test_dir, cp=classpath)
+        # parse sentences
+        parse(train_dir, cp=classpath)
+        parse(dev_dir, cp=classpath)
+        parse(test_dir, cp=classpath)
 
     # get vocabulary
     build_vocab(

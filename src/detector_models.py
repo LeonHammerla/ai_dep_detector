@@ -9,12 +9,12 @@ import numpy as np
 import torch
 from sklearn.metrics import classification_report
 from torch import nn, optim
-from datasets import Dataset
+from datasets import Dataset, DatasetDict
 from transformers import BertModel, BertTokenizer, AdamW, get_linear_schedule_with_warmup
 from sklearn.kernel_approximation import RBFSampler
 from dependency_features import DependencyFeatureExtractor
 from extract_dataset import load_dataset_info_bert, get_dataloaders, construct_dataset_bert, load_dataset_info_feat, \
-    construct_dataset_feat, load_dataset_info_bert_feat
+    construct_dataset_feat, load_dataset_info_bert_feat, dep_parse_spacy_datasetdict
 from textscorer import ScorerModel
 from sklearn.linear_model import SGDClassifier
 from sklearn.preprocessing import StandardScaler
@@ -244,6 +244,189 @@ class BertFeatureTrainer:
                 # print(test_acc)
                 print(classification_report(y_test, y_pred, target_names=["human", "machine"]))
 
+
+
+"""
+========================================================================================================================
+========================================================================================================================
+BERT-BASED-DEPSTRING-TRAINING
+========================================================================================================================
+========================================================================================================================
+"""
+
+
+class BertFeatureTrainerDepStrings:
+    def __init__(self,
+                 model: nn.Module,
+                 batch_size: int = 8,
+                 epochs: int = 10,
+                 device: str = "cuda:0",
+                 max_steps: Optional[int] = None,
+                 lr_rate: float = 2e-5,
+                 warm_up_steps: int = 2000
+                 ):
+        self.device = device
+        self.model = model
+        self.model.to(self.device)
+        self.epochs = epochs
+        self.optimizer = AdamW(model.parameters(), lr=lr_rate, correct_bias=False)
+        # self.optimizer = torch.optim.SGD(model.parameters(), lr=lr_rate)
+        dataset = DatasetDict.load_from_disk(f"../data/hm_dataset_{tok_name.replace('/', '-')}+tree_small+dep_tree")
+        if device != "cpu":
+            dataset.set_format("torch")
+        if max_steps is not None:
+            max_steps = max_steps // epochs
+            dataset["train"] = dataset["train"].select(range(int(max_steps * 0.8)))
+            dataset["test"] = dataset["test"].select(range(int(max_steps * 0.1)))
+            dataset["validation"] = dataset["validation"].select(range(int(max_steps * 0.1)))
+
+        print("DATASET:")
+        print(f'train-size: {len(dataset["train"])}')
+        print(f'test-size: {len(dataset["test"])}')
+        print(f'val-size: {len(dataset["validation"])}')
+        print("Example")
+        print(dataset["train"][0])
+
+        self.n_samples_train = len(dataset["train"])
+        self.n_samples_test = len(dataset["test"])
+        self.n_samples_val = len(dataset["validation"])
+        trl, tel, val = get_dataloaders(dataset, batch_size=batch_size)
+        self.train_data_loader = trl
+        self.test_data_loader = tel
+        self.val_data_loader = val
+        self.total_steps = int(len(self.train_data_loader) * self.epochs)
+        self.scheduler = get_linear_schedule_with_warmup(self.optimizer,
+                                                         num_warmup_steps=warm_up_steps,
+                                                         num_training_steps=self.total_steps)
+        # self.loss_fn = nn.CrossEntropyLoss().to(self.device)
+        self.loss_fn = nn.BCELoss().to(self.device)
+
+    def train_epoch(self):
+        model = self.model.train()
+        losses = []
+        correct_predictions = 0
+        for d in tqdm(self.train_data_loader, desc="train"):
+            targets = d["label"].float().to(self.device)
+            input_ids = d["input_ids"].to(self.device)
+            attention_mask = d["attention_mask"].to(self.device)
+
+            preds = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask
+            ).flatten()
+            # _, preds = torch.max(outputs, dim=1)
+            # print(preds)
+            # print(targets)
+            loss = self.loss_fn(preds, targets)
+            losses.append(loss.item())
+            self.optimizer.zero_grad()
+            loss.backward()
+            # nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            self.optimizer.step()
+            self.scheduler.step()
+            correct_predictions += torch.sum(preds.round() == targets)
+        return correct_predictions.double() / self.n_samples_train, np.mean(losses)
+
+    def eval_model(self):
+        model = self.model.eval()
+        losses = []
+        correct_predictions = 0
+        with torch.no_grad():
+            for d in tqdm(self.val_data_loader, desc="eval"):
+                input_ids = d["input_ids"].to(self.device)
+                attention_mask = d["attention_mask"].to(self.device)
+                targets = d["label"].float().to(self.device)
+                preds = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask
+                ).flatten()
+                # _, preds = torch.max(outputs, dim=1)
+                loss = self.loss_fn(preds, targets)
+                correct_predictions += torch.sum(preds.round() == targets)
+                losses.append(loss.item())
+        return correct_predictions.double() / self.n_samples_val, np.mean(losses)
+
+    def test_model(self):
+        model = self.model.eval()
+        losses = []
+        correct_predictions = 0
+        with torch.no_grad():
+            for d in self.test_data_loader:
+                input_ids = d["input_ids"].to(self.device)
+                attention_mask = d["attention_mask"].to(self.device)
+                targets = d["label"].float().to(self.device)
+                preds = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask
+                ).flatten()
+                # _, preds = torch.max(outputs, dim=1)
+                loss = self.loss_fn(preds, targets)
+                correct_predictions += torch.sum(preds.round() == targets)
+                losses.append(loss.item())
+        return correct_predictions.double() / self.n_samples_test, np.mean(losses)
+
+    def get_predictions(self):
+        model = self.model.eval()
+        review_texts = []
+        predictions = []
+        prediction_probs = []
+        real_values = []
+        with torch.no_grad():
+            for d in tqdm(self.test_data_loader, desc="test"):
+                texts = d["sent"]
+                input_ids = d["input_ids"].to(self.device)
+                attention_mask = d["attention_mask"].to(self.device)
+                targets = d["label"].float().to(self.device)
+                preds = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask
+                ).flatten()
+                # _, preds = torch.max(outputs, dim=1)
+                review_texts.extend(texts)
+                predictions.extend(preds.round())
+                prediction_probs.extend(preds)
+                real_values.extend(targets)
+        predictions = torch.stack(predictions).cpu()
+        prediction_probs = torch.stack(prediction_probs).cpu()
+        real_values = torch.stack(real_values).cpu()
+        print(predictions)
+        print(prediction_probs)
+        print(real_values)
+        return review_texts, predictions, prediction_probs, real_values
+
+    def train(self):
+        history = defaultdict(list)
+        best_accuracy = 0
+        progress = 0
+        for epoch in range(self.epochs):
+            print(f'Epoch {epoch + 1}/{self.epochs}')
+            print('-' * 10)
+            print(f"lr: {self.scheduler.get_lr()}")
+            train_acc, train_loss = self.train_epoch()
+            print(f'Train loss {train_loss} accuracy {train_acc}')
+            val_acc, val_loss = self.eval_model()
+            print(f'Val   loss {val_loss} accuracy {val_acc}')
+            print()
+            history['train_acc'].append(train_acc)
+            history['train_loss'].append(train_loss)
+            history['val_acc'].append(val_acc)
+            history['val_loss'].append(val_loss)
+            if val_acc > best_accuracy:
+                torch.save(self.model.state_dict(), '../data/dep_form_exp/best_model_state.bin')
+                best_accuracy = val_acc
+                progress = 0
+            else:
+                progress += 1
+
+            if progress > 5:
+                break
+
+            if epoch % 3 == 0:
+                # test_acc, _ = self.test_model()
+                _, y_pred, y_pred_probs, y_test = self.get_predictions()
+                print(f"EPOCH: {epoch}")
+                # print(test_acc)
+                print(classification_report(y_test, y_pred, target_names=["human", "machine"]))
 
 """
 ========================================================================================================================
@@ -1023,7 +1206,8 @@ class BertFeatureDepFeatureTrainer:
 
 
 if __name__ == "__main__":
-    """tok_name = "prajjwal1/bert-tiny"
+    """
+    tok_name = "prajjwal1/bert-tiny"
     # construct_dataset_bert(tok_name=tok_name)
     model = HumanMachineClassifierBertTiny(tok_name=tok_name)
     trainer = BertFeatureTrainer(model, batch_size=32, epochs=50, lr_rate=2e-5).train()
@@ -1050,5 +1234,10 @@ if __name__ == "__main__":
                                  feat_model="tree_small",
                                  tok_name=tok_name).train()
     """
+    # dep_parse_spacy_datasetdict()
     # VectorMachine().train()
-    SGDMachine().train()
+    # SGDMachine().train()
+    tok_name = "prajjwal1/bert-tiny"
+    # construct_dataset_bert(tok_name=tok_name)
+    model = HumanMachineClassifierBertTiny(tok_name)
+    trainer = BertFeatureTrainerDepStrings(model, batch_size=32, epochs=50, lr_rate=2e-5).train()

@@ -1,7 +1,7 @@
 import argparse
 import os
 
-DP = os.path.realpath(os.path.join(os.path.realpath(__file__), "..", "data"))
+DP = os.path.realpath(os.path.join(os.path.realpath(__file__), "..", "data_test"))
 BP = os.path.realpath(os.path.join(os.path.realpath(__file__), ".."))
 
 
