@@ -68,6 +68,7 @@ TREE-LSTM-BEFORE:
    macro avg       0.85      0.84      0.85     22049
 weighted avg       0.85      0.85      0.85     22049
 
+
 TREE-LSTM-After:
 
               precision    recall  f1-score   support
@@ -108,6 +109,34 @@ BERT-FEATURES-DEPSTRING-AFTER:
     accuracy                           0.75     22050
    macro avg       0.74      0.74      0.74     22050
 weighted avg       0.74      0.75      0.74     22050
+
+
+====================================================================================================
+
+====================================================================================================
+
+
+DEP-FEATURES-BEFORE:
+              precision    recall  f1-score   support
+
+       human       0.68      0.51      0.58     10071
+     machine       0.66      0.80      0.72     11988
+
+    accuracy                           0.67     22059
+   macro avg       0.67      0.65      0.65     22059
+weighted avg       0.67      0.67      0.66     22059
+
+
+
+DEP-FEATURES-AFTER:
+              precision    recall  f1-score   support
+
+       human       0.64      0.44      0.52     10062
+     machine       0.63      0.79      0.70     11988
+
+    accuracy                           0.63     22050
+   macro avg       0.63      0.61      0.61     22050
+weighted avg       0.63      0.63      0.62     22050
 
 
 ====================================================================================================

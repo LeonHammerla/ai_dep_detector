@@ -667,6 +667,40 @@ class HumanMachineClassifierFeature10(nn.Module):
         return self.sigmoid(x)
 
 
+class HumanMachineClassifierFeatureSKLEARN(nn.Module):
+    def __init__(self):
+        super(HumanMachineClassifierFeatureSKLEARN, self).__init__()
+        self.layer1 = nn.Linear(512, 265)
+        self.layer2 = nn.Linear(265, 64)
+        self.layer3 = nn.Linear(64, 1)
+        self.sigmoid = nn.Sigmoid()
+        # self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, feat):
+        x = torch.relu(self.layer1(feat))
+        x = torch.relu(self.layer2(x))
+        x = torch.relu(self.layer3(x))
+        x = self.sigmoid(x)
+        return x
+
+
+class HumanMachineClassifierFeatureSKLEARN2(nn.Module):
+    def __init__(self):
+        super(HumanMachineClassifierFeatureSKLEARN2, self).__init__()
+        self.layer1 = nn.Linear(1024, 265)
+        self.layer2 = nn.Linear(265, 64)
+        self.layer3 = nn.Linear(64, 1)
+        self.sigmoid = nn.Sigmoid()
+        # self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, feat):
+        x = torch.relu(self.layer1(feat))
+        x = torch.relu(self.layer2(x))
+        x = self.layer3(x)
+        x = self.sigmoid(x)
+        return x
+
+
 class FeatureTrainer:
     def __init__(self,
                  model: nn.Module,
@@ -677,7 +711,8 @@ class FeatureTrainer:
                  lr_rate: float = 2e-5,
                  warm_up_steps: int = 2000,
                  epsilon: float = 1e-10,
-                 feat_model: str = "tree"
+                 feat_model: str = "tree_small",
+                 skl: bool = True
                  ):
         self.epsilon = epsilon
         self.device = device
@@ -685,6 +720,7 @@ class FeatureTrainer:
         print(model)
         self.model.to(self.device)
         self.epochs = epochs
+
         """self.optimizer = AdamW(model.parameters(),
                                lr=lr_rate,
                                correct_bias=False
@@ -696,7 +732,9 @@ class FeatureTrainer:
         else:
             format_torch = False
 
-        dataset = load_dataset_info_feat(do_print=False, format_torch=format_torch, feat_model=feat_model)
+        dataset = DatasetDict.load_from_disk(f"../data/hm_dataset_{tok_name.replace('/', '-')}+{feat_model}")
+        if format_torch:
+            dataset.set_format("torch")
         if max_steps is not None:
             max_steps = max_steps // epochs
             dataset["train"] = dataset["train"].select(range(int(max_steps * 0.8)))
@@ -707,6 +745,16 @@ class FeatureTrainer:
         print(f'train-size: {len(dataset["train"])}')
         print(f'test-size: {len(dataset["test"])}')
         print(f'val-size: {len(dataset["validation"])}')
+        self.skl = skl
+        if skl:
+            self.rbf_feature = RBFSampler(gamma=1, random_state=1, n_components=1024)
+            # self.rbf_feature = Nystroem(gamma=.2, random_state=1, n_components=1024)
+            # self.rbf_feature = SkewedChi2Sampler(skewedness=.01, n_components=1024, random_state=0)
+            self.rbf_feature.fit(dataset["train"]["feat"])
+            pickle.dump(self.rbf_feature, open('../data/feat_exp/feature', 'wb'))
+        else:
+            self.rbf_feature = None
+
 
         self.n_samples_train = len(dataset["train"])
         self.n_samples_test = len(dataset["test"])
@@ -729,7 +777,11 @@ class FeatureTrainer:
         correct_predictions = 0
         for d in tqdm(self.train_data_loader, desc="train"):
             targets = d["label"].float().to(self.device)
-            input_feats = d["feat"].to(self.device)
+            if self.skl:
+                input_feats = self.rbf_feature.transform(d["feat"])
+                input_feats = torch.from_numpy(input_feats).to(self.device)
+            else:
+                input_feats = d["feat"].to(self.device)
             # print(input_feats[17])
             preds = model(
                 feat=input_feats
@@ -758,7 +810,11 @@ class FeatureTrainer:
         with torch.no_grad():
             for d in tqdm(self.val_data_loader, desc="eval"):
                 targets = d["label"].float().to(self.device)
-                input_feats = d["feat"].to(self.device)
+                if self.skl:
+                    input_feats = self.rbf_feature.transform(d["feat"])
+                    input_feats = torch.from_numpy(input_feats).to(self.device)
+                else:
+                    input_feats = d["feat"].to(self.device)
                 preds = model(
                     feat=input_feats
                 ).flatten()
@@ -775,7 +831,11 @@ class FeatureTrainer:
         with torch.no_grad():
             for d in self.test_data_loader:
                 targets = d["label"].float().to(self.device)
-                input_feats = d["feat"].to(self.device)
+                if self.skl:
+                    input_feats = self.rbf_feature.transform(d["feat"])
+                    input_feats = torch.from_numpy(input_feats).to(self.device)
+                else:
+                    input_feats = d["feat"].to(self.device)
                 preds = model(
                     feat=input_feats
                 ).flatten()
@@ -795,7 +855,11 @@ class FeatureTrainer:
             for d in tqdm(self.test_data_loader, desc="test"):
                 texts = d["sent"]
                 targets = d["label"].float().to(self.device)
-                input_feats = d["feat"].to(self.device)
+                if self.skl:
+                    input_feats = self.rbf_feature.transform(d["feat"])
+                    input_feats = torch.from_numpy(input_feats).to(self.device)
+                else:
+                    input_feats = d["feat"].to(self.device)
                 preds = model(
                     feat=input_feats
                 ).flatten()
@@ -830,16 +894,16 @@ class FeatureTrainer:
             history['val_acc'].append(val_acc)
             history['val_loss'].append(val_loss)
             if val_acc > best_accuracy:
-                torch.save(self.model.state_dict(), '../data/best_feature_model_state.bin')
+                torch.save(self.model.state_dict(), '../data/feat_exp/best_model_state.bin')
                 best_accuracy = val_acc
                 progress = 0
             else:
                 progress += 1
 
-            if progress > 15:
+            if progress > 5:
                 break
 
-            if epoch % 30 == 0:
+            if epoch % 5 == 0:
                 try:
                     # test_acc, _ = self.test_model()
                     _, y_pred, y_pred_probs, y_test = self.get_predictions()
@@ -1234,10 +1298,15 @@ if __name__ == "__main__":
                                  feat_model="tree_small",
                                  tok_name=tok_name).train()
     """
-    # dep_parse_spacy_datasetdict()
+    """# dep_parse_spacy_datasetdict()
     # VectorMachine().train()
     # SGDMachine().train()
     tok_name = "prajjwal1/bert-tiny"
     # construct_dataset_bert(tok_name=tok_name)
     model = HumanMachineClassifierBertTiny(tok_name)
-    trainer = BertFeatureTrainerDepStrings(model, batch_size=32, epochs=50, lr_rate=2e-5).train()
+    trainer = BertFeatureTrainerDepStrings(model, batch_size=32, epochs=50, lr_rate=2e-5).train()"""
+    tok_name = "prajjwal1/bert-tiny"
+    # m = HumanMachineClassifierFeatureSKLEARN2()
+    m = HumanMachineClassifierFeature5()
+    FeatureTrainer(m, skl=False, epochs=50, warm_up_steps=100, lr_rate=0.01).train()
+
