@@ -345,6 +345,60 @@ def dep_parse_spacy_datasetdict(spacy_model_id: str = "en_core_web_sm",
     dsd = dsd.map(map_tok)
     dsd.save_to_disk(f"../data/hm_dataset_{tok_name.replace('/', '-')}+{feat_model}+dep_tree")
 
+
+def dep_parse_spacy_dataset(ds: Dataset,
+                            save_path: str,
+                            spacy_model_id: str = "en_core_web_sm",
+                            tok_name: str = 'prajjwal1/bert-tiny',
+                            max_len: int = 512) -> Dataset:
+
+    def parse(example, nlp: spacy.Language):
+        doc = nlp(example["sent"])
+        tree = to_nltk_tree(list(doc.sents)[0].root)
+        example["sent"] = tree.pformat(nodesep=":")
+        return example
+
+    # tokenizer
+    def tok(example, tokenizer_obj: BertTokenizer, max_len: int = 512):
+        tokenized = tokenizer_obj.encode_plus(example["sent"],
+                                              add_special_tokens=True,
+                                              max_length=max_len,
+                                              return_token_type_ids=False,
+                                              # padding=True,
+                                              pad_to_max_length=True,
+                                              return_attention_mask=True,
+                                              truncation=True,
+                                              return_tensors='pt')
+        example["input_ids"] = tokenized["input_ids"].flatten()
+        example["attention_mask"] = tokenized["attention_mask"].flatten()
+        return example
+
+    @Language.component("special_split")
+    def special_split(doc):
+        # Note this code is not robust with handling indices
+        for i, tok in enumerate(doc):
+            if i == 0:
+                tok.is_sent_start = True
+            else:
+                tok.is_sent_start = False
+        return doc
+
+    # spacy-model
+    model = spacy.load(spacy_model_id)
+    model.add_pipe("special_split", before="parser")
+
+    # Bert tokenizer
+    tokenizer = BertTokenizer.from_pretrained(tok_name)
+
+    # map functions
+    map_parse = partial(parse, nlp=model)
+    map_tok = partial(tok, tokenizer_obj=tokenizer, max_len=max_len)
+    ds = ds.map(map_parse)
+    ds = ds.map(map_tok)
+    ds.save_to_disk(save_path)
+    return ds
+
+
 """
 ========================================================================================================================
 DataLoaders

@@ -14,7 +14,7 @@ from transformers import BertModel, BertTokenizer, AdamW, get_linear_schedule_wi
 from dependency_features import DependencyFeatureExtractor
 from detector_models import HumanMachineClassifierBertTiny, HumanMachineClassifierBertTinyFeatureTiny
 from extract_dataset import load_dataset_info_bert, get_dataloaders, construct_dataset_bert, load_dataset_info_feat, \
-    construct_dataset_feat, load_dataset_info_bert_feat
+    construct_dataset_feat, load_dataset_info_bert_feat, dep_parse_spacy_dataset
 from paraphraser import Paraphraser, AutoParaphraser
 from textscorer import ScorerModel
 
@@ -138,10 +138,12 @@ class Experiment:
         real_values = torch.stack(real_values).cpu()
         return review_texts, predictions, prediction_probs, real_values
 
-    def paraphrase_ds(self, paraphraser: Paraphraser, range_: Optional[int] = None, save_load: str = "save") -> DataLoader:
+    def paraphrase_ds(self, paraphraser: Paraphraser, range_: Optional[int] = None,
+                      save_load: str = "save") -> DataLoader:
         if save_load == "save":
             dataset_test: Dataset = \
-            DatasetDict.load_from_disk(f"../data/hm_dataset_{self.tok_name.replace('/', '-')}+{self.feat_model}")["test"]
+                DatasetDict.load_from_disk(f"../data/hm_dataset_{self.tok_name.replace('/', '-')}+{self.feat_model}")[
+                    "test"]
             if range_ is not None:
                 dataset_test = dataset_test.select(range(range_))
             paraphrased_dataset = self.paraphrase_dataset(dataset_test,
@@ -160,6 +162,66 @@ class Experiment:
 
         test_loader = DataLoader(paraphrased_dataset, batch_size=self.batch_size, num_workers=4)
         return test_loader
+
+    def test(self, test_loader: DataLoader) -> str:
+        _, y_pred, y_pred_probs, y_test = self.get_predictions(test_loader)
+        return classification_report(y_test, y_pred, target_names=["human", "machine"])
+
+
+class Experiment2:
+    def __init__(self,
+                 model: nn.Module,
+                 model_path: str,
+                 ds_before: Dataset,
+                 ds_after: Dataset,
+                 batch_size: int = 32,
+                 max_len: int = 512,
+                 device: str = "cuda:0",
+                 ):
+        # load model
+        self.device = device
+        self.model = model
+        self.model.load_state_dict(torch.load(model_path))
+        self.model.to(self.device)
+        self.model.eval()
+        self.ds_before = ds_before
+        self.ds_after = ds_after
+
+        # load dataset
+        if self.device != "cpu":
+            self.ds_before.set_format("torch")
+            self.ds_after.set_format("torch")
+
+        self.test_data_loader_before = DataLoader(self.ds_before, batch_size=batch_size, num_workers=4)
+        self.test_data_loader_after = DataLoader(self.ds_after, batch_size=batch_size, num_workers=4)
+        self.batch_size = batch_size
+        self.max_len = max_len
+
+    def get_predictions(self, data_loader: DataLoader):
+        review_texts = []
+        predictions = []
+        prediction_probs = []
+        real_values = []
+        with torch.no_grad():
+            for d in tqdm(data_loader, desc="test"):
+                texts = d["sent"]
+                input_feats = d["feat"].to(self.device)
+                input_ids = d["input_ids"].to(self.device)
+                attention_mask = d["attention_mask"].to(self.device)
+                targets = d["label"].float().to(self.device)
+                preds = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    feat=input_feats
+                ).flatten()
+                review_texts.extend(texts)
+                predictions.extend(preds.round())
+                prediction_probs.extend(preds)
+                real_values.extend(targets)
+        predictions = torch.stack(predictions).cpu()
+        prediction_probs = torch.stack(prediction_probs).cpu()
+        real_values = torch.stack(real_values).cpu()
+        return review_texts, predictions, prediction_probs, real_values
 
     def test(self, test_loader: DataLoader) -> str:
         _, y_pred, y_pred_probs, y_test = self.get_predictions(test_loader)
@@ -187,7 +249,7 @@ def main(ran: Optional[int] = 50):
     del exp_dep
     del m_dep
 
-    print(100*"=")
+    print(100 * "=")
     print("BERT-FEATURES-BEFORE:")
     print(exp_dep_report0)
     print("\n")
@@ -195,7 +257,7 @@ def main(ran: Optional[int] = 50):
     print(exp_dep_report1)
     print(100 * "=")
 
-    f.write(100*"=")
+    f.write(100 * "=")
     f.write("\n")
     f.write("BERT-FEATURES-BEFORE:\n\n")
     f.write(exp_dep_report0)
@@ -240,10 +302,38 @@ def main(ran: Optional[int] = 50):
     f.close()
 
 
+def dep_form_exp(load: bool = False):
+    # general
+    paraphrased_dataset = Dataset.load_from_disk(f"../data/paraphrased_ds/para_set")
+    if not load:
+        dataset_after = dep_parse_spacy_dataset(paraphrased_dataset, save_path=f"../data/paraphrased_ds/para_set_depform")
+    else:
+        dataset_after = Dataset.load_from_disk(f"../data/paraphrased_ds/para_set_depform")
+    dataset_before = DatasetDict.load_from_disk(f"../data/hm_dataset_prajjwal1-bert-tiny+tree_small+dep_tree")["test"]
+
+    # dep test
+    model = HumanMachineClassifierBertTiny()
+    m_dep_path = "../data/dep_form_exp/best_model_state.bin"
+    exp = Experiment2(model=model,
+                      model_path=m_dep_path,
+                      ds_before=dataset_before,
+                      ds_after=dataset_after)
+
+    exp_dep_report0 = exp.test(exp.test_data_loader_before)
+    exp_dep_report1 = exp.test(exp.test_data_loader_after)
+    print(100 * "=")
+    print("BERT-FEATURES-BEFORE:")
+    print(exp_dep_report0)
+    print("\n")
+    print("BERT-FEATURES-AFTER:")
+    print(exp_dep_report1)
+    print(100 * "=")
+
+
 if __name__ == "__main__":
     # main(None)
     # general
-    feat_model = "tree_small"
+    """feat_model = "tree_small"
     tok_name = "prajjwal1/bert-tiny"
     para = AutoParaphraser("humarin/chatgpt_paraphraser_on_T5_base", cuda=True)
 
@@ -255,4 +345,6 @@ if __name__ == "__main__":
                          feat_model=feat_model,
                          tok_name=tok_name
                          )
-    paraphrased_testloader = exp_dep.paraphrase_ds(para, None, save_load="save")
+    paraphrased_testloader = exp_dep.paraphrase_ds(para, None, save_load="save")"""
+    dep_form_exp()
+
