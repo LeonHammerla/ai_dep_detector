@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-
 # module for childsumtreelstm
 from tree_lstm.treelstm import Constants
 
